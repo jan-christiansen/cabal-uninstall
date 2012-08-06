@@ -1,10 +1,11 @@
 name:                     cabal-uninstall
 version:                  0.1
-cabal-version:            >= 1.2
+cabal-version:            >= 1.6
 stability:                alpha
 description:              Very simple script to delete ca cabal package.
 synopsis:                 Uninstall cabal packages
 license:                  BSD3
+license-file:             LICENSE
 author:                   Jan Christiansen
 maintainer:               Jan Christiansen <info@monoid-it.de>
 category:                 Distribution
