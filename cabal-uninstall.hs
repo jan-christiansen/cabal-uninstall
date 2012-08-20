@@ -1,12 +1,14 @@
 module Main where
 
 
+import Data.List (intercalate)
 import System.Environment (getArgs)
 import System.Process (system, runInteractiveCommand)
 import System.Exit (ExitCode(..))
 import System.IO (hGetContents, hFlush, stdout)
 import System.Directory (doesDirectoryExist, removeDirectoryRecursive)
-import System.FilePath (takeDirectory, dropTrailingPathSeparator)
+import System.FilePath (takeDirectory, dropTrailingPathSeparator, splitDirectories)
+import Control.Monad.Instances ()
 
 
 main :: IO ()
@@ -36,7 +38,14 @@ usageInfo =
 
 internalErrorInfo :: String
 internalErrorInfo =
-  "internal error: please contact Jan Christiansen (christiansen@monoid-it.de)"
+  "internal error: please contact Jan Christiansen (info@monoid-it.de)"
+
+multiplePackagesInfo :: [String] -> String
+multiplePackagesInfo packages =
+  "There are multiple packages you might refer to, namely\n" 
+    ++ "  " ++ intercalate ", " packages ++ "\n"
+    ++ "please reinvoke cabal-uninstall and specify the version of the package\n"
+    ++ "(for example 'cabal-uninstall parsec-3.1.3')\n."
 
 parseForceArg :: [String] -> Maybe Bool
 parseForceArg []          = Just False
@@ -52,9 +61,18 @@ directoryOfPackage package = do
        [] -> hGetContents herr >>= return . Left
        _  -> return (packageDir (words result))
  where
-  packageDir ["library-dirs:", libDir] =
-    Right (takeDirectory (dropTrailingPathSeparator libDir))
-  packageDir _ = Left internalErrorInfo
+  packageDir libDirs =
+    case extractLibDirs libDirs of
+         Right [packDir] -> Right packDir
+         Right packDirs  -> Left (multiplePackagesInfo (map (last . splitDirectories) packDirs))
+         Left  err       -> Left err
+
+extractLibDirs :: [String] -> Either String [String]
+extractLibDirs [] = Right []
+extractLibDirs ("library-dirs:":libDir:libDirs) = do
+    packDirs <- extractLibDirs libDirs
+    return (takeDirectory (dropTrailingPathSeparator libDir):packDirs) 
+extractLibDirs _ = Left internalErrorInfo
 
 removePackageDirectory :: FilePath -> IO ()
 removePackageDirectory packageDir = do

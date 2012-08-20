@@ -1,8 +1,8 @@
 name:                     cabal-uninstall
-version:                  0.1
+version:                  0.1.1
 cabal-version:            >= 1.6
 stability:                alpha
-description:              Very simple script to delete ca cabal package.
+description:              Very simple script to delete a cabal package.
 synopsis:                 Uninstall cabal packages
 license:                  BSD3
 license-file:             LICENSE
@@ -17,8 +17,9 @@ source-repository head
 
 executable cabal-uninstall
   main-is:                  cabal-uninstall.hs
+  ghc-options:              -Wall
   build-depends:
-    base,
+    base >= 4 && < 5,
     filepath,
     directory,
     process
