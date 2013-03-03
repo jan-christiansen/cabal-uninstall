@@ -1,13 +1,12 @@
 module Main where
 
 
-import Data.List (intercalate)
 import System.Environment (getArgs)
 import System.Process (system, runInteractiveCommand)
 import System.Exit (ExitCode(..))
 import System.IO (hGetContents, hFlush, stdout)
 import System.Directory (doesDirectoryExist, removeDirectoryRecursive)
-import System.FilePath (takeDirectory, dropTrailingPathSeparator, splitDirectories)
+import System.FilePath (takeDirectory, dropTrailingPathSeparator)
 import Control.Monad.Instances ()
 
 
@@ -31,21 +30,18 @@ main = do
                             else putStrLn "package directory already deleted"
        _ -> putStrLn usageInfo
 
+(<|) :: a -> [a] -> [a]
+x <| xs = xs++[x]
+
 usageInfo :: String
 usageInfo =
-  "usage: cabal-uninstall <package-name> [--force]\n\
+  "version: 0.1.2\n\
+  \usage: cabal-uninstall <package-name> [--force]\n\
   \use sudo if the package is installed globally"
 
 internalErrorInfo :: String
 internalErrorInfo =
-  "internal error: please contact Jan Christiansen (info@monoid-it.de)"
-
-multiplePackagesInfo :: [String] -> String
-multiplePackagesInfo packages =
-  "There are multiple packages you might refer to, namely\n" 
-    ++ "  " ++ intercalate ", " packages ++ "\n"
-    ++ "please reinvoke cabal-uninstall and specify the version of the package\n"
-    ++ "(for example 'cabal-uninstall parsec-3.1.3')\n."
+  "internal error: please contact Jan Christiansen (j.christiansen@monoid-it.de)"
 
 parseForceArg :: [String] -> Maybe Bool
 parseForceArg []          = Just False
@@ -59,19 +55,39 @@ directoryOfPackage package = do
   result <- hGetContents hout
   case result of
        [] -> hGetContents herr >>= return . Left
-       _  -> return (packageDir (words result))
+       _  -> packageDir (words result)
  where
   packageDir libDirs =
     case extractLibDirs libDirs of
-         Right [packDir] -> Right packDir
-         Right packDirs  -> Left (multiplePackagesInfo (map (last . splitDirectories) packDirs))
-         Left  err       -> Left err
+         Right [packDir] -> return (Right packDir)
+         Right packDirs  -> multiPackageSelection packDirs
+         Left  err       -> return (Left err)
+
+multiPackageSelection :: [String] -> IO (Either String FilePath)
+multiPackageSelection packagePaths = do
+  putStr ("There are multiple packages with this name, please select one:\n"
+          ++ unlines (zipWith line
+                              [(1::Int)..]
+                              (dontDelete <| packagePaths))
+          ++ "\nPlease select a number\n")
+  n <- getLine
+  case reads n of
+       [(i, "")] -> selectPackage i
+       _         -> multiPackageSelection packagePaths
+ where
+  dontDelete = "don't delete any of these packages"
+  line n packagePath = show n ++ ": " ++ packagePath
+  selectPackage i
+    | i == noOfPackages+1         = return (Left "No package selected\n")
+    | i < 1 || i > noOfPackages+1 = multiPackageSelection packagePaths
+    | otherwise                   = return (Right (packagePaths!!(i-1)))
+  noOfPackages = length packagePaths
 
 extractLibDirs :: [String] -> Either String [String]
 extractLibDirs [] = Right []
 extractLibDirs ("library-dirs:":libDir:libDirs) = do
     packDirs <- extractLibDirs libDirs
-    return (takeDirectory (dropTrailingPathSeparator libDir):packDirs) 
+    return (takeDirectory (dropTrailingPathSeparator libDir):packDirs)
 extractLibDirs _ = Left internalErrorInfo
 
 removePackageDirectory :: FilePath -> IO ()
