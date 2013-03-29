@@ -1,7 +1,8 @@
 cabal-uninstall
 ===============
 
-Very simple Haskell script to uninstall cabal packages.
+A very simple Haskell script that invokes `ghc-pkg` to uninstall cabal
+packages.
 
 
 Usage
@@ -9,10 +10,12 @@ Usage
 
 Invoke
 
-    cabal-uninstall <package-name> [--force]
+    cabal-uninstall {pkg-id} [--force]
 
-to unregister a package nameed `<package-name>` and delete the
-corresponding library folder. The parameter `--force` is passed to
+to unregister a package nameed `{pkg-id}` and delete the corresponding
+package folder. If there are several packages with the name `{pkg-id}`
+the script asks the user to select one. If `cabal-uninstall` is called
+with the parameter `--force`, then this parameter is passed to
 `ghc-pkg unregister` to unregister a package even if it breaks other
-packages. If the package is installed globally you have to provide
-root privileges to `cabal-uninstall`.
+packages. You might have to provide root privileges to
+`cabal-uninstall` to delete the folder.
