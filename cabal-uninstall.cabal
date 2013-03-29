@@ -1,5 +1,5 @@
 name:                     cabal-uninstall
-version:                  0.1.3
+version:                  0.1.4
 cabal-version:            >= 1.6
 stability:                alpha
 description:              Very simple script to delete a cabal package.
@@ -22,4 +22,5 @@ executable cabal-uninstall
     base >= 4 && < 5,
     filepath,
     directory,
-    process
+    process,
+    mtl

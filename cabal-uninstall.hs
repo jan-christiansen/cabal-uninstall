@@ -1,108 +1,182 @@
 module Main where
 
 
+import Data.List (groupBy)
 import System.Environment (getArgs)
 import System.Process (system, runInteractiveCommand)
 import System.Exit (ExitCode(..))
 import System.IO (hGetContents, hFlush, stdout)
 import System.Directory (doesDirectoryExist, removeDirectoryRecursive)
-import System.FilePath (takeDirectory, dropTrailingPathSeparator)
+import System.FilePath (takeDirectory)
 import Control.Monad.Instances ()
+import Control.Monad.Error
 
 
 main :: IO ()
 main = do
   input <- getArgs
-  case input of
-       package:args -> do
-         let useForce = parseForceArg args
-         res <- directoryOfPackage package
-         case (res, useForce) of
-              (Left err        , _         ) -> putStr err
-              (_               , Nothing   ) -> putStrLn usageInfo
-              (Right packageDir, Just force) -> do
-                exitcode <- unregisterPackage package force
-                case exitcode of
-                     ExitFailure _ -> return ()
-                     ExitSuccess -> do
-                       b <- doesDirectoryExist packageDir
-                       if b then removePackageDirectory packageDir
-                            else putStrLn "package directory already deleted"
-       _ -> putStrLn usageInfo
+  result <- runErrorT (mainError input)
+  either putStr (const (return ())) result
+
+mainError :: [String] -> ErrorT String IO ()
+mainError input = do
+  (package, force) <- ErrorT (return (parseArgs input))
+  info@(PackageInfo _ _ _ libraryDir) <- ErrorT (selectPackageVersion package)
+  ErrorT (unregisterPackage info force)
+  lift (removeDirectory "package directory" (takeDirectory libraryDir))
 
 (<|) :: a -> [a] -> [a]
 x <| xs = xs++[x]
 
 usageInfo :: String
 usageInfo =
-  "version: 0.1.2\n\
-  \usage: cabal-uninstall <package-name> [--force]\n\
+  "Version: 0.1.4\n\
+  \Usage: cabal-uninstall {pkg-id} [--force]\n\
   \use sudo if the package is installed globally"
+
+ambiguousErrorInfo :: String
+ambiguousErrorInfo =
+  "There are multiple versions of this package that cannot be distinguished"
 
 internalErrorInfo :: String
 internalErrorInfo =
-  "internal error: please contact Jan Christiansen (j.christiansen@monoid-it.de)"
+  "Internal error: please contact Jan Christiansen (j.christiansen@monoid-it.de)"
 
-parseForceArg :: [String] -> Maybe Bool
-parseForceArg []          = Just False
-parseForceArg ["--force"] = Just True
-parseForceArg _           = Nothing
+parseArgs :: [String] -> Either String (String, Bool)
+parseArgs [package]           = Right (package, False)
+parseArgs [package,"--force"] = Right (package, True)
+parseArgs _                   = Left usageInfo
 
-directoryOfPackage :: String -> IO (Either String FilePath)
-directoryOfPackage package = do
-  let command = "ghc-pkg field " ++ package ++ " library-dirs"
+
+data PackageInfo = PackageInfo Database String String String
+
+instance Show PackageInfo where
+  show (PackageInfo db name version _) = name ++ "-" ++ version ++ " (" ++ show db ++ " package)"
+
+instance Eq PackageInfo where
+  PackageInfo db1 n1 v1 _ == PackageInfo db2 n2 v2 _ =
+    db1==db2 && n1==n2 && v1==v2
+
+
+data Database = Global | User
+  deriving Eq
+
+instance Show Database where
+  show Global = "global"
+  show User   = "user"
+
+
+allPackageInfos :: String -> IO (Either String [PackageInfo])
+allPackageInfos package = do
+  userPackageInfos <- packageInfos User package
+  globalPackageInfos <- packageInfos Global package
+  case (userPackageInfos, globalPackageInfos) of
+       (Left user, Left global)   -> return (Left (user ++ global))
+       (Left _, Right global)     -> return (Right global)
+       (Right user, Left _)       -> return (Right user)
+       (Right user, Right global) -> return (Right (user ++ global))
+
+parameter :: Database -> String
+parameter Global = "--global"
+parameter User   = "--user"
+
+packageInfos :: Database -> String -> IO (Either String [PackageInfo])
+packageInfos database package = do
+  let fields = "name,version,library-dirs"
+  let command = "ghc-pkg field " ++ parameter database ++ " " ++ package ++ " " ++ fields
   (_, hout, herr, _) <- runInteractiveCommand command
   result <- hGetContents hout
   case result of
-       [] -> hGetContents herr >>= return . Left
-       _  -> packageDir (words result)
- where
-  packageDir libDirs =
-    case extractLibDirs libDirs of
-         Right [packDir] -> return (Right packDir)
-         Right packDirs  -> multiPackageSelection packDirs
-         Left  err       -> return (Left err)
+       [] -> do
+             err <- hGetContents herr
+             return (Left (show database ++ " database: " ++ err))
+       _  -> return (parseOutput database (words result))
 
-multiPackageSelection :: [String] -> IO (Either String FilePath)
-multiPackageSelection packagePaths = do
-  putStr ("There are multiple packages with this name, please select one:\n"
-          ++ unlines (zipWith line
-                              [(1::Int)..]
-                              (dontDelete <| packagePaths))
+
+type Parser a = [String] -> Either String (a, [String])
+
+
+parseOutput :: Database -> [String] -> Either String [PackageInfo]
+parseOutput database input = do
+  (packageInfo, rest) <- parseMany (parseVersion database) input
+  if null rest
+     then return packageInfo
+     else fail internalErrorInfo
+
+parseMany :: Parser a -> Parser [a]
+parseMany _        []    = return ([], [])
+parseMany parseOne input = do
+  (x, rest) <- parseOne input
+  (xs, rest') <- parseMany parseOne rest
+  return (x:xs, rest')
+
+parseVersion :: Database -> Parser PackageInfo
+parseVersion database ("name:":name:"version:":version:"library-dirs:":libraryDirs:rest) =
+  return (PackageInfo database name version libraryDirs, rest)
+parseVersion _ _ = Left internalErrorInfo
+
+selectPackageVersion :: String -> IO (Either String PackageInfo)
+selectPackageVersion package = do
+  eInfos <- allPackageInfos package
+  case eInfos of
+       Right []     -> return (Left internalErrorInfo)
+       Right [info] -> return (Right info)
+       Right infos  -> selectInfo infos
+       Left err     -> return (Left err)
+
+ambiguous :: [PackageInfo] -> Bool
+ambiguous infos = all singleton (groupBy (==) infos)
+ where
+  singleton [_] = False
+  singleton _   = True
+
+selectInfo :: [PackageInfo] -> IO (Either String PackageInfo)
+selectInfo infos
+  | ambiguous infos = do
+    mapM_ print infos
+    return (Left ambiguousErrorInfo)
+  | otherwise       = do
+  putStr ("There are multiple versions of this package, please select one:\n"
+          ++ unlines (zipWith line [(1::Int)..] (map show infos))
           ++ "\nPlease select a number\n")
   n <- getLine
   case reads n of
-       [(i, "")] -> selectPackage i
-       _         -> multiPackageSelection packagePaths
+       [(i, "")] -> selectInfo' i
+       _         -> selectInfo infos
  where
-  dontDelete = "don't delete any of these packages"
   line n packagePath = show n ++ ": " ++ packagePath
-  selectPackage i
-    | i == noOfPackages+1         = return (Left "No package selected\n")
-    | i < 1 || i > noOfPackages+1 = multiPackageSelection packagePaths
-    | otherwise                   = return (Right (packagePaths!!(i-1)))
-  noOfPackages = length packagePaths
+  selectInfo' i
+    | i < 1 || i > noOfVersions+1 = selectInfo infos
+    | otherwise                   = return (Right (infos!!(i-1)))
+  noOfVersions = length infos
 
-extractLibDirs :: [String] -> Either String [String]
-extractLibDirs [] = Right []
-extractLibDirs ("library-dirs:":libDir:libDirs) = do
-    packDirs <- extractLibDirs libDirs
-    return (takeDirectory (dropTrailingPathSeparator libDir):packDirs)
-extractLibDirs _ = Left internalErrorInfo
+removeDirectory :: String -> FilePath -> IO ()
+removeDirectory description directory = do
+  b <- doesDirectoryExist directory
+  if b
+     then guardedAction ("Delete the " ++ description ++ " " ++ directory ++ "?")
+                        (removeDirectoryRecursive directory)
+                        (return ())
+     else putStrLn ("The " ++ description ++ " " ++ directory ++ " does not exist")
 
-removePackageDirectory :: FilePath -> IO ()
-removePackageDirectory packageDir = do
-  putStr ("delete library directory " ++ packageDir ++ "? (yes/no)")
+unregisterPackage :: PackageInfo -> Bool -> IO (Either String ())
+unregisterPackage packageInfo@(PackageInfo db name version _) force = do
+  let command = "ghc-pkg unregister " ++ parameter db ++ useForce force ++ name ++ "-" ++ version
+  guardedAction ("Unregister the package " ++ show packageInfo ++ "?")
+                (do exitcode <- system command
+                    return (errorcode exitcode))
+                (return (Right ()))
+ where
+  useForce True  = " --force "
+  useForce False = " "
+  errorcode exitcode@(ExitFailure _) = Left (show exitcode)
+  errorcode _                        = Right ()
+
+guardedAction :: String -> IO a -> IO a -> IO a
+guardedAction question thenAction elseAction = do
+  putStr (question ++ " (yes/no)")
   hFlush stdout
   choice <- getLine
   case choice of
-       "yes" -> removeDirectoryRecursive packageDir
-       _     -> return ()
-
-unregisterPackage :: String -> Bool -> IO ExitCode
-unregisterPackage package force = do
-  putStrLn "unregistering package"
-  system ("ghc-pkg unregister " ++ useForce force ++ package)
- where
-  useForce True  = "--force "
-  useForce False = ""
+       "yes" -> thenAction
+       _     -> elseAction
