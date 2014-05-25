@@ -3,9 +3,9 @@ module Main where
 
 import Data.List (groupBy)
 import System.Environment (getArgs)
-import System.Process (system, runInteractiveCommand)
+import System.Process (system, readProcessWithExitCode)
 import System.Exit (ExitCode(..))
-import System.IO (hGetContents, hFlush, stdout)
+import System.IO (hFlush, stdout)
 import System.Directory (doesDirectoryExist, removeDirectoryRecursive)
 import System.FilePath (takeDirectory)
 import Control.Monad.Instances ()
@@ -30,9 +30,9 @@ x <| xs = xs++[x]
 
 usageInfo :: String
 usageInfo =
-  "Version: 0.1.4\n\
+  "Version: 0.1.5\n\
   \Usage: cabal-uninstall {pkg-id} [--force]\n\
-  \use sudo if the package is installed globally"
+  \use sudo if the package is installed globally\n"
 
 ambiguousErrorInfo :: String
 ambiguousErrorInfo =
@@ -71,7 +71,7 @@ allPackageInfos package = do
   userPackageInfos <- packageInfos User package
   globalPackageInfos <- packageInfos Global package
   case (userPackageInfos, globalPackageInfos) of
-       (Left user, Left global)   -> return (Left (user ++ global))
+       (Left user, Left _)        -> return (Left user)
        (Left _, Right global)     -> return (Right global)
        (Right user, Left _)       -> return (Right user)
        (Right user, Right global) -> return (Right (user ++ global))
@@ -83,14 +83,11 @@ parameter User   = "--user"
 packageInfos :: Database -> String -> IO (Either String [PackageInfo])
 packageInfos database package = do
   let fields = "name,version,library-dirs"
-  let command = "ghc-pkg field " ++ parameter database ++ " " ++ package ++ " " ++ fields
-  (_, hout, herr, _) <- runInteractiveCommand command
-  result <- hGetContents hout
-  case result of
-       [] -> do
-             err <- hGetContents herr
-             return (Left (show database ++ " database: " ++ err))
-       _  -> return (parseOutput database (words result))
+      args = ["field", parameter database, package, fields]
+  (exitcode, out, _) <- readProcessWithExitCode "ghc-pkg" args ""
+  return (case exitcode of
+               ExitFailure _ -> Left usageInfo
+               _             -> either (\_ -> Left usageInfo) Right (parseOutput database (words out)))
 
 
 type Parser a = [String] -> Either String (a, [String])
@@ -101,7 +98,7 @@ parseOutput database input = do
   (packageInfo, rest) <- parseMany (parseVersion database) input
   if null rest
      then return packageInfo
-     else fail internalErrorInfo
+     else Left "Remaining tokens after parsing packageInfo"
 
 parseMany :: Parser a -> Parser [a]
 parseMany _        []    = return ([], [])
@@ -113,7 +110,7 @@ parseMany parseOne input = do
 parseVersion :: Database -> Parser PackageInfo
 parseVersion database ("name:":name:"version:":version:"library-dirs:":libraryDirs:rest) =
   return (PackageInfo database name version libraryDirs, rest)
-parseVersion _ _ = Left internalErrorInfo
+parseVersion _ _ = Left "PackageInfo format unknown"
 
 selectPackageVersion :: String -> IO (Either String PackageInfo)
 selectPackageVersion package = do
@@ -163,14 +160,13 @@ unregisterPackage :: PackageInfo -> Bool -> IO (Either String ())
 unregisterPackage packageInfo@(PackageInfo db name version _) force = do
   let command = "ghc-pkg unregister " ++ parameter db ++ useForce force ++ name ++ "-" ++ version
   guardedAction ("Unregister the package " ++ show packageInfo ++ "?")
-                (do exitcode <- system command
-                    return (errorcode exitcode))
+                (system command >>= return . errorcode)
                 (return (Right ()))
  where
   useForce True  = " --force "
   useForce False = " "
-  errorcode exitcode@(ExitFailure _) = Left (show exitcode)
-  errorcode _                        = Right ()
+  errorcode (ExitFailure _) = Left ""
+  errorcode _               = Right ()
 
 guardedAction :: String -> IO a -> IO a -> IO a
 guardedAction question thenAction elseAction = do
