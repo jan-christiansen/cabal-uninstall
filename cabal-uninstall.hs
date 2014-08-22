@@ -1,13 +1,13 @@
 module Main where
 
 
-import Data.List (groupBy)
+import Data.List (groupBy, isPrefixOf)
 import System.Environment (getArgs)
 import System.Process (system, readProcessWithExitCode)
 import System.Exit (ExitCode(..))
 import System.IO (hFlush, stdout)
 import System.Directory (doesDirectoryExist, removeDirectoryRecursive)
-import System.FilePath (takeDirectory)
+import System.FilePath (takeDirectory, takeBaseName)
 import Control.Monad.Instances ()
 import Control.Monad.Error
 
@@ -21,9 +21,9 @@ main = do
 mainError :: [String] -> ErrorT String IO ()
 mainError input = do
   (package, force) <- ErrorT (return (parseArgs input))
-  info@(PackageInfo _ _ _ libraryDir) <- ErrorT (selectPackageVersion package)
+  info@(PackageInfo _ libraryName _ libraryDir) <- ErrorT (selectPackageVersion package)
   ErrorT (unregisterPackage info force)
-  lift (removeDirectory "package directory" (takeDirectory libraryDir))
+  lift (removeDirectory "package directory" (selectDirectory libraryName libraryDir))
 
 (<|) :: a -> [a] -> [a]
 x <| xs = xs++[x]
@@ -111,6 +111,13 @@ parseVersion :: Database -> Parser PackageInfo
 parseVersion database ("name:":name:"version:":version:"library-dirs:":libraryDirs:rest) =
   return (PackageInfo database name version libraryDirs, rest)
 parseVersion _ _ = Left "PackageInfo format unknown"
+
+selectDirectory :: String -> FilePath -> FilePath
+selectDirectory libraryName libraryDir
+  | libraryName `isPrefixOf` (takeBaseName libraryDir) = libraryDir
+  | otherwise =
+    -- Old Cabal GHC directory structure: <libdir>/<libraryName>/<compiler>
+    takeDirectory libraryDir
 
 selectPackageVersion :: String -> IO (Either String PackageInfo)
 selectPackageVersion package = do
