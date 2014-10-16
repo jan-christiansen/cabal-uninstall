@@ -30,7 +30,7 @@ x <| xs = xs++[x]
 
 usageInfo :: String
 usageInfo =
-  "Version: 0.1.5\n\
+  "Version: 0.1.6\n\
   \Usage: cabal-uninstall {pkg-id} [--force]\n\
   \use sudo if the package is installed globally\n"
 
