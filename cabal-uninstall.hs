@@ -168,7 +168,7 @@ unregisterPackage packageInfo@(PackageInfo db name version _) force = do
   let command = "ghc-pkg unregister " ++ parameter db ++ useForce force ++ name ++ "-" ++ version
   guardedAction ("Unregister the package " ++ show packageInfo ++ "?")
                 (system command >>= return . errorcode)
-                (return (Right ()))
+                (return (Left ""))
  where
   useForce True  = " --force "
   useForce False = " "
